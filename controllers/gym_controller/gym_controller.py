@@ -6,6 +6,7 @@ try:
     import gym
     import numpy as np
     from stable_baselines3 import PPO
+    from stable_baselines3.common.env_checker import check_env
 except ImportError:
     sys.exit(
         'Please make sure you have all dependencies installed. '
@@ -33,7 +34,7 @@ class WebotsStickEnv(Supervisor, gym.Env):
         self.observation_space = gym.spaces.Box(-high, high, dtype=np.float32)
         self.state = None
         self.steps_beyond_done = None
-        self.spec = gym.envs.registration.EnvSpec(id='WebotsEnv-v1', max_episode_steps=max_episode_steps)
+        self.spec = gym.envs.registration.EnvSpec(id='WebotsEnv-v0', max_episode_steps=max_episode_steps)
 
         # Environment specific
         self.__timestep = int(self.getBasicTimeStep())
@@ -57,8 +58,8 @@ class WebotsStickEnv(Supervisor, gym.Env):
         super().step(self.__timestep)
 
         # Set random initial position
-        initial_x = random.uniform(-self.x_threshold / 2, self.x_threshold / 2)
-        initial_theta = random.uniform(-self.theta_threshold_radians / 2, self.theta_threshold_radians / 2)
+        initial_x = random.uniform(-self.x_threshold / 8, self.x_threshold / 8)
+        initial_theta = random.uniform(-self.theta_threshold_radians / 8, self.theta_threshold_radians / 8)
         self.getFromDef('SLIDER_PARAMETERS').getField('position').setSFFloat(initial_x)
         self.getFromDef('PENDULUM_PARAMETERS').getField('position').setSFFloat(initial_theta)
 
@@ -74,6 +75,7 @@ class WebotsStickEnv(Supervisor, gym.Env):
         # Internals
         self.__previous_x = 0
         self.__previous_theta = 0
+        super().step(self.__timestep)
 
         # Open AI Gym generic
         self.steps_beyond_done = None
@@ -81,7 +83,7 @@ class WebotsStickEnv(Supervisor, gym.Env):
 
     def step(self, action):
         # Execute the action
-        velocity = .06 if action == 1 else -.06
+        velocity = .2 if action == 1 else -.2
         self.__motor.setVelocity(velocity)
 
         # Observation
@@ -125,10 +127,11 @@ class WebotsStickEnv(Supervisor, gym.Env):
 
 # Initialize the environment
 env = WebotsStickEnv()
+check_env(env)
 
 # Train
 model = PPO('MlpPolicy', env, verbose=1)
-model.learn(total_timesteps=5e6)
+model.learn(total_timesteps=1e5)
 
 # Replay
 print('Training is finished, press `Y` for replay...')
