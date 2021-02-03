@@ -30,10 +30,9 @@ class WebotsStickEnv(Supervisor, gym.Env):
             ],
             dtype=np.float32
         )
-        self.action_space = gym.spaces.Discrete(2)
+        self.action_space = gym.spaces.Box(low=-0.01, high=0.01, shape=(1,), dtype=np.float32)
         self.observation_space = gym.spaces.Box(-high, high, dtype=np.float32)
         self.state = None
-        self.steps_beyond_done = None
         self.spec = gym.envs.registration.EnvSpec(id='WebotsEnv-v0', max_episode_steps=max_episode_steps)
 
         # Environment specific
@@ -66,6 +65,7 @@ class WebotsStickEnv(Supervisor, gym.Env):
         # Motors
         self.__motor = self.getDevice('linear motor')
         self.__motor.setPosition(float('inf'))
+        self.__motor.setVelocity(0)
 
         # Sensors
         self.__motor.getPositionSensor().enable(self.__timestep)
@@ -78,13 +78,13 @@ class WebotsStickEnv(Supervisor, gym.Env):
         super().step(self.__timestep)
 
         # Open AI Gym generic
-        self.steps_beyond_done = None
         return np.array([initial_x, 0, initial_theta, 0])
 
     def step(self, action):
         # Execute the action
-        velocity = .2 if action == 1 else -.2
-        self.__motor.setVelocity(velocity)
+        print(float(action))
+        self.__motor.setVelocity(float(action))
+        super().step(self.__timestep)
 
         # Observation
         x = self.__motor.getPositionSensor().getValue()
@@ -106,21 +106,8 @@ class WebotsStickEnv(Supervisor, gym.Env):
         # Reward
         if not done:
             reward = 1.0
-        elif self.steps_beyond_done is None:
-            self.steps_beyond_done = 0
-            reward = 1.0
         else:
-            if self.steps_beyond_done == 0:
-                gym.logger.warn(
-                    "You are calling 'step()' even though this "
-                    "environment has already returned done = True. You "
-                    "should always call 'reset()' once you receive 'done = "
-                    "True' -- any further steps are undefined behavior."
-                )
-            self.steps_beyond_done += 1
             reward = 0.0
-
-        super().step(self.__timestep)
 
         return self.state, reward, done, {}
 
@@ -130,8 +117,8 @@ env = WebotsStickEnv()
 check_env(env)
 
 # Train
-model = PPO('MlpPolicy', env, verbose=1)
-model.learn(total_timesteps=1e5)
+model = PPO('MlpPolicy', env, n_steps=2048, verbose=1)
+model.learn(total_timesteps=1e3)
 
 # Replay
 print('Training is finished, press `Y` for replay...')
