@@ -1,17 +1,25 @@
-import gym
-import numpy as np
-from stable_baselines3 import HER, DDPG
+import sys
+import random
 from controller import Supervisor
 
+try:
+    import gym
+    import numpy as np
+    from stable_baselines3 import PPO
+except ImportError:
+    sys.exit(
+        'Please make sure you have all dependencies installed. '
+        'Run: "pip3 install numpy gym stable_baselines3"'
+    )
 
 
 class WebotsStickEnv(Supervisor, gym.Env):
-    def __init__(self):
+    def __init__(self, max_episode_steps=1000):
         super().__init__()
 
         # Open AI Gym generic
-        self.theta_threshold_radians = 1
-        self.x_threshold = 2000
+        self.theta_threshold_radians = 0.4
+        self.x_threshold = 0.3
         high = np.array(
             [
                 self.x_threshold * 2,
@@ -25,21 +33,22 @@ class WebotsStickEnv(Supervisor, gym.Env):
         self.observation_space = gym.spaces.Box(-high, high, dtype=np.float32)
         self.state = None
         self.steps_beyond_done = None
+        self.spec = gym.envs.registration.EnvSpec(id='WebotsEnv-v1', max_episode_steps=max_episode_steps)
 
         # Environment specific
         self.__timestep = int(self.getBasicTimeStep())
         self.__previous_x = 0
         self.__previous_theta = 0
-        self.__left_motor = None
-        self.__right_motor = None
+        self.__motor = None
         self.__pendulum_sensor = None
 
-    def __get_state(self):
-        x = (self.__left_motor.getPositionSensor().getValue() + self.__right_motor.getPositionSensor().getValue()) / 2
-        theta = self.__pendulum_sensor.getValue()
-        x_dot = (x - self.__previous_x) / (self.__timestep * 1e3)
-        theta_dot = (theta - self.__previous_theta) / (self.__timestep * 1e3)
-        return np.array([x, x_dot, theta, theta_dot])
+        # Tools
+        self.keyboard = self.getKeyboard()
+        self.keyboard.enable(self.__timestep)
+
+    def wait_keyboard(self):
+        while env.keyboard.getKey() != ord('Y'):
+            super().step(self.__timestep)
 
     def reset(self):
         # Reset the simulation
@@ -47,15 +56,18 @@ class WebotsStickEnv(Supervisor, gym.Env):
         self.simulationReset()
         super().step(self.__timestep)
 
+        # Set random initial position
+        initial_x = random.uniform(-self.x_threshold / 2, self.x_threshold / 2)
+        initial_theta = random.uniform(-self.theta_threshold_radians / 2, self.theta_threshold_radians / 2)
+        self.getFromDef('SLIDER_PARAMETERS').getField('position').setSFFloat(initial_x)
+        self.getFromDef('PENDULUM_PARAMETERS').getField('position').setSFFloat(initial_theta)
+
         # Motors
-        self.__left_motor = self.getDevice('left wheel motor')
-        self.__right_motor = self.getDevice('right wheel motor')
-        self.__left_motor.setPosition(float('inf'))
-        self.__right_motor.setPosition(float('inf'))
+        self.__motor = self.getDevice('linear motor')
+        self.__motor.setPosition(float('inf'))
 
         # Sensors
-        self.__left_motor.getPositionSensor().enable(self.__timestep)
-        self.__right_motor.getPositionSensor().enable(self.__timestep)
+        self.__motor.getPositionSensor().enable(self.__timestep)
         self.__pendulum_sensor = self.getDevice('pendulum sensor')
         self.__pendulum_sensor.enable(self.__timestep)
 
@@ -65,19 +77,21 @@ class WebotsStickEnv(Supervisor, gym.Env):
 
         # Open AI Gym generic
         self.steps_beyond_done = None
-        self.state = self.__get_state()
-        return self.state
+        return np.array([initial_x, 0, initial_theta, 0])
 
     def step(self, action):
-        obs = None
-        reward = None
-        done = None
-        info = {}
+        # Execute the action
+        velocity = .06 if action == 1 else -.06
+        self.__motor.setVelocity(velocity)
 
-        super().step(self.__timestep)
-
-        self.state = self.__get_state()
-        obs = self.state
+        # Observation
+        x = self.__motor.getPositionSensor().getValue()
+        theta = self.__pendulum_sensor.getValue()
+        x_dot = (x - self.__previous_x) / (self.__timestep * 1e3)
+        theta_dot = (theta - self.__previous_theta) / (self.__timestep * 1e3)
+        self.__previous_x = x
+        self.__previous_theta = theta
+        self.state = np.array([x, x_dot, theta, theta_dot])
 
         # Done
         done = bool(
@@ -104,31 +118,26 @@ class WebotsStickEnv(Supervisor, gym.Env):
             self.steps_beyond_done += 1
             reward = 0.0
 
-        return obs, reward, done, info
+        super().step(self.__timestep)
+
+        return self.state, reward, done, {}
 
 
-import sys
-import pathlib
-import importlib
+# Initialize the environment
+env = WebotsStickEnv()
 
-sys.path.insert(0, pathlib.Path(__file__).parent.absolute())
+# Train
+model = PPO('MlpPolicy', env, verbose=1)
+model.learn(total_timesteps=5e6)
 
+# Replay
+print('Training is finished, press `Y` for replay...')
+env.wait_keyboard()
 
-gym.envs.register(
-    id='WebotsStick-v0',
-    entry_point='gym_controller:WebotsStickEnv',
-    max_episode_steps=1000
-)
-env = gym.make('CartPole-v0')
-
-model = HER('MlpPolicy', env, DDPG)
-
-for i in range(1000):
-    observation = env.reset()
-    for t in range(1000):
-        # action, _states = model.predict(obs)
-        action = env.action_space.sample()
-        obs, reward, done, info = env.step(action)
-        if done:
-            print("Episode finished after {} timesteps".format(t+1))
-            break
+obs = env.reset()
+for t in range(100000):
+    action, _states = model.predict(obs)
+    obs, reward, done, info = env.step(action)
+    print(obs)
+    if done:
+        obs = env.reset()
